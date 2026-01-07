@@ -1,0 +1,277 @@
+## 1. Minimal Architecture (Collector-Only)
+
+```
+/collector
+  /sources
+    rss.go
+    http.go
+  /models
+    article.go
+  /storage
+    file.go
+  main.go
+```
+
+**Flow**
+
+```
+Source → Normalize → Save to file
+```
+
+---
+
+## 2. Data Model (Normalized Output)
+
+Create **one unified struct** for everything you collect.
+
+### `models/article.go`
+
+```go
+package models
+
+import "time"
+
+type Article struct {
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Source      string    `json:"source"`
+	State       string    `json:"state"`
+	Category    string    `json:"category"`
+	URL         string    `json:"url"`
+	PublishedAt time.Time `json:"published_at"`
+	CollectedAt time.Time `json:"collected_at"`
+	Content     string    `json:"content"`
+}
+```
+
+This will **never change much** — future-proof.
+
+---
+
+## 3. Storage Strategy (File-Based)
+
+### Option A: JSON Lines (Best for Now)
+
+- One article per line
+    
+- Easy to append
+    
+- Easy to process later
+    
+
+```
+data/
+ └── france/
+     └── 2026-01-07.jsonl
+```
+
+---
+
+### `storage/file.go`
+
+```go
+package storage
+
+import (
+	"encoding/json"
+	"os"
+)
+
+func SaveJSONL(path string, v any) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(append(data, '\n'))
+	return err
+}
+```
+
+---
+
+## 4. RSS Collector (Primary Source)
+
+### `sources/rss.go`
+
+```go
+package sources
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/mmcdole/gofeed"
+
+	"yourproject/models"
+)
+
+func FetchRSS(feedURL, source, state, category string) ([]models.Article, error) {
+	parser := gofeed.NewParser()
+	feed, err := parser.ParseURL(feedURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var articles []models.Article
+
+	for _, item := range feed.Items {
+		articles = append(articles, models.Article{
+			ID:          uuid.NewString(),
+			Title:       item.Title,
+			Source:      source,
+			State:       state,
+			Category:    category,
+			URL:         item.Link,
+			PublishedAt: *item.PublishedParsed,
+			CollectedAt: time.Now().UTC(),
+			Content:     item.Description,
+		})
+	}
+
+	return articles, nil
+}
+```
+
+📦 Dependency:
+
+```bash
+go get github.com/mmcdole/gofeed
+go get github.com/google/uuid
+```
+
+---
+
+## 5. Main Collector Runner
+
+### `main.go`
+
+```go
+package main
+
+import (
+	"log"
+	"path/filepath"
+	"time"
+
+	"yourproject/sources"
+	"yourproject/storage"
+)
+
+func main() {
+	date := time.Now().Format("2006-01-02")
+	path := filepath.Join("data", "france", date+".jsonl")
+
+	articles, err := sources.FetchRSS(
+		"https://www.gouvernement.fr/rss",
+		"French Government",
+		"France",
+		"Politics",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, article := range articles {
+		err := storage.SaveJSONL(path, article)
+		if err != nil {
+			log.Println("save error:", err)
+		}
+	}
+}
+```
+
+---
+
+## 6. Automation (Scheduling)
+
+### Simple cron
+
+```bash
+*/30 * * * * /path/to/collector
+```
+
+### Or internal ticker (later)
+
+```go
+for range time.Tick(30 * time.Minute) {
+	runCollector()
+}
+```
+
+---
+
+## 7. Deduplication (Important Early)
+
+Before saving:
+
+- Hash URL
+    
+- Store seen URLs in memory or file
+    
+
+### Simple hash
+
+```go
+func HashURL(url string) string {
+	sum := sha256.Sum256([]byte(url))
+	return hex.EncodeToString(sum[:])
+}
+```
+
+Use it as `Article.ID`.
+
+---
+
+## 8. What You Should NOT Do Yet ❌
+
+- Databases
+    
+- APIs
+    
+- Authentication
+    
+- NLP
+    
+- Dashboards
+    
+
+You’re doing this right.
+
+---
+
+## 9. Next Logical Steps (After This Works)
+
+1. Multiple RSS feeds per state
+    
+2. Website HTML fallback
+    
+3. Source reliability tagging
+    
+4. Structured directory per country/topic
+    
+5. Compression (gzip daily files)
+    
+
+---
+
+## 10. If You Want Next
+
+I can:
+
+- Add **HTML scraping fallback**
+    
+- Design **source config files (YAML)**
+    
+- Add **rate-limiting & retries**
+    
+- Create a **multi-state collector engine**
+    
+
+Just tell me what you want to build next 🚀
